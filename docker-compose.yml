@@ -1,0 +1,17 @@
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: sfi_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: sfi_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - sfi_pgdata:/var/lib/postgresql/data
+
+volumes:
+  sfi_pgdata:

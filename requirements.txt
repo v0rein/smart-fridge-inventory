@@ -1,0 +1,7 @@
+sqlalchemy>=2.0.0
+python-telegram-bot>=20.0
+python-dotenv
+psycopg2-binary
+groq
+cryptography
+pytest
