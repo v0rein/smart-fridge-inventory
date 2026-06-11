@@ -3,6 +3,7 @@ import sys
 import logging
 import tempfile
 import datetime
+import cv2
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -22,6 +23,183 @@ from backend.database.db import SessionLocal
 from backend.database import crud
 from backend.database.models import CategoryEnum, ExpirySourceEnum, ActionEnum
 from backend.intelligence.ai_parser import parse_fridge_item_image
+
+def capture_webcam(output_path="/tmp/fridge_capture.jpg") -> bool:
+    """Capture an image from webcam (video0)."""
+    try:
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            logging.error("Webcam tidak dapat dibuka. Pastikan webcam terhubung.")
+            return False
+        ret, frame = cap.read()
+        cap.release()
+        if ret:
+            cv2.imwrite(output_path, frame)
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Gagal mengambil foto dari webcam: {e}")
+        return False
+
+async def perform_absolute_sync(db, user, img_path) -> str:
+    """Lakukan sinkronisasi absolut: AI mendeteksi X, maka db diset ke X. Item yang tak ada = 0."""
+    from backend.database.models import StatusEnum
+    
+    ai_results = parse_fridge_item_image(img_path)
+    if not ai_results:
+        return "Tidak dapat mendeteksi barang apa pun dari kamera. Pastikan pencahayaan cukup."
+
+    # Ambil semua item aktif di kulkas user
+    items_in_fridge = crud.get_active_inventory_by_user(db, user.user_id)
+    
+    detected_items = []
+    result_lines = []
+
+    for ai_result in ai_results:
+        nama = ai_result.get("item_name", "Tidak diketahui")
+        nama_lower = nama.lower()
+        kategori_str = ai_result.get("category", "Lainnya")
+        try:
+            jumlah = int(ai_result.get("quantity", 1))
+        except (ValueError, TypeError):
+            jumlah = 1
+        satuan = ai_result.get("unit", "buah")
+        
+        detected_items.append({
+            "nama": nama,
+            "nama_lower": nama_lower,
+            "jumlah": jumlah,
+            "kategori": kategori_str,
+            "satuan": satuan,
+            "expiry_date_str": ai_result.get("expiry_date")
+        })
+
+    processed_item_ids = []
+    
+    for det in detected_items:
+        # Cari barang existing
+        match = next((i for i in items_in_fridge if i.item_name.lower() == det["nama_lower"]), None)
+        if not match:
+            match = next((i for i in items_in_fridge if det["nama_lower"] in i.item_name.lower() or i.item_name.lower() in det["nama_lower"]), None)
+            
+        if match:
+            processed_item_ids.append(match.item_id)
+            if match.quantity != det["jumlah"]:
+                diff = det["jumlah"] - match.quantity
+                action = ActionEnum.CHECKIN if diff > 0 else ActionEnum.PARTIAL_CHECKOUT
+                crud.update_inventory_quantity(db, match.item_id, det["jumlah"])
+                crud.create_scan_log(db, match.item_id, action, diff)
+                result_lines.append(f"~ {match.item_name}: disesuaikan dari {match.quantity} -> {det['jumlah']} {match.unit}")
+        else:
+            # Barang baru
+            try:
+                kategori = CategoryEnum(det["kategori"].capitalize())
+            except ValueError:
+                kategori = CategoryEnum.LAINNYA
+                
+            # Default expiry: +7 hari
+            expiry_date = datetime.date.today() + datetime.timedelta(days=7)
+            if det["expiry_date_str"]:
+                try:
+                    expiry_date = datetime.datetime.strptime(det["expiry_date_str"], "%Y-%m-%d").date()
+                except ValueError:
+                    pass
+            
+            item_data = {
+                "user_id": int(str(user.user_id)),
+                "item_name": det["nama"],
+                "category": kategori,
+                "unit": det["satuan"],
+                "quantity": det["jumlah"],
+                "expiry_date": expiry_date,
+                "expiry_source": ExpirySourceEnum.LLM_ESTIMATE,
+            }
+            new_item = crud.create_inventory_item(db, item_data)
+            crud.create_scan_log(db, int(str(new_item.item_id)), ActionEnum.CHECKIN, det["jumlah"])
+            processed_item_ids.append(int(str(new_item.item_id)))
+            result_lines.append(f"+ {det['nama']}: ditambahkan {det['jumlah']} {det['satuan']}")
+            
+    # Check-out item yang tidak terdeteksi (artinya sudah diambil dari kulkas)
+    for item in items_in_fridge:
+        if item.item_id not in processed_item_ids:
+            crud.update_inventory_quantity(db, item.item_id, 0)
+            crud.create_scan_log(db, item.item_id, ActionEnum.CHECKOUT, -item.quantity)
+            result_lines.append(f"- {item.item_name}: otomatis dihapus karena tidak ada di kulkas")
+
+    if not result_lines:
+        return "Tidak ada perubahan di kulkas (stok sama persis dengan sebelumnya)."
+        
+    return "Hasil Sinkronisasi Kamera:\n" + "\n".join(result_lines)
+
+
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command /scan - Meminta webcam memotret saat ini juga"""
+    chat_id = str(update.effective_chat.id)
+    status_msg = await context.bot.send_message(chat_id=chat_id, text="Memotret dari webcam...")
+    
+    img_path = "/tmp/fridge_capture.jpg"
+    success = capture_webcam(img_path)
+    
+    if not success:
+        await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text="Gagal memotret dari webcam. Pastikan kamera terpasang di Raspberry Pi.")
+        return
+        
+    await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text="Memproses hasil foto kamera dengan AI...")
+    
+    db = SessionLocal()
+    try:
+        user = crud.get_user_by_chat_id(db, chat_id)
+        if not user:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text="Kamu belum terdaftar, silahkan ketik /start.")
+            return
+            
+        result_msg = await perform_absolute_sync(db, user, img_path)
+        
+        with open(img_path, 'rb') as photo:
+            await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=result_msg)
+            
+        await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+        
+    finally:
+        db.close()
+
+
+async def auto_scan_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job 5 menit - Memotret dan sync. Jika ada perubahan, kirim notif ke Admin (user pertama)."""
+    img_path = "/tmp/fridge_auto_capture.jpg"
+    success = capture_webcam(img_path)
+    if not success:
+        return
+        
+    db = SessionLocal()
+    try:
+        users = crud.get_all_users(db)
+        if not users:
+            return # Belum ada user terdaftar
+            
+        # Asumsikan user pertama sebagai admin kulkas utama
+        admin_user = users[0]
+        result_msg = await perform_absolute_sync(db, admin_user, img_path)
+        
+        # Kirim notif HANYA jika ada perubahan stok
+        if result_msg != "Tidak ada perubahan di kulkas (stok sama persis dengan sebelumnya).":
+            try:
+                decrypted_id = crud.get_decrypted_chat_id(admin_user)
+                with open(img_path, 'rb') as photo:
+                    await context.bot.send_photo(
+                        chat_id=int(decrypted_id),
+                        photo=photo,
+                        caption=f"*Auto-Scan Update*\n{result_msg}",
+                        parse_mode="Markdown"
+                    )
+            except Exception as e:
+                logging.error(f"Gagal mengirim notif auto-scan: {e}")
+                
+    except Exception as e:
+        logging.error(f"Auto-scan error: {e}")
+    finally:
+        db.close()
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -65,6 +243,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  Contoh: `/tambah Susu Kemasan 2 botol 7`\n"
         "`/ambil [nama] [jumlah]`\n"
         "  Contoh: `/ambil Susu 1`\n"
+        "`/scan` — Ambil foto langsung dari webcam\n"
         "`/help` — Tampilkan panduan ini\n\n"
         "*AI Scanner:*\n"
         "Kirim foto barang ke chat ini. Sistem otomatis mendeteksi:\n"
@@ -586,6 +765,7 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("expired", expired))
     application.add_handler(CommandHandler("tambah", tambah))
     application.add_handler(CommandHandler("ambil", ambil))
+    application.add_handler(CommandHandler("scan", scan_command))
 
     # Photo handler (AI Scanner)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -604,6 +784,15 @@ if __name__ == "__main__":
             name="daily_expiry_notification",
         )
         print("Notifikasi harian terjadwal setiap jam 08:00 WIB.")
+        
+        # Auto Scan setiap 5 menit via Webcam
+        job_queue.run_repeating(
+            auto_scan_job,
+            interval=300, # 300 detik = 5 menit
+            first=10, # jalankan pertama kali 10 detik setelah start
+            name="auto_webcam_scan"
+        )
+        print("Auto-Scan Webcam terjadwal setiap 5 menit.")
 
     print("Bot SFI sedang berjalan. Tekan Ctrl+C untuk berhenti.")
     application.run_polling()

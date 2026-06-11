@@ -61,6 +61,16 @@ grep -q "^DATABASE_URL=" .env || echo "DATABASE_URL=$DB_URL" >> .env
 grep -q "^TELEGRAM_BOT_TOKEN=" .env || echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_TOKEN" >> .env
 grep -q "^GROQ_API_KEY=" .env || echo "GROQ_API_KEY=$GROQ_KEY" >> .env
 
+# Generate ENCRYPTION_KEY for cryptography if it's empty or placeholder
+if ! grep -q "^ENCRYPTION_KEY=" .env || grep -q "isi_dengan_fernet_key" .env; then
+    echo "Generating new ENCRYPTION_KEY..."
+    # Hilangkan placeholder lama
+    sed -i '/^ENCRYPTION_KEY=.*$/d' .env
+    # Generate key baru pakai python cryptography dari venv
+    NEW_KEY=$($PROJECT_DIR/.venv/bin/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    echo "ENCRYPTION_KEY=$NEW_KEY" >> .env
+fi
+
 echo ".env file configured successfully."
 
 # 5. Run PostgreSQL
