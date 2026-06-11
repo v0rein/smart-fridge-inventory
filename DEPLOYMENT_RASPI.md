@@ -61,6 +61,27 @@ Karena menggunakan IP Camera (bukan kamera langsung di GPIO), **tidak ada wiring
 
 ## Setup Raspberry Pi
 
+### Cara Otomatis (Direkomendasikan)
+Kami telah menyediakan script instalasi otomatis yang akan menjalankan semua langkah di bawah secara otomatis. 
+1. Pastikan Anda sudah menginstall Raspberry Pi OS (langkah 1 di bawah).
+2. Salin folder proyek ke Raspberry Pi, atau clone repository:
+   ```bash
+   git clone <URL_REPO_SFI> ~/sfi
+   cd ~/sfi
+   ```
+3. Beri izin eksekusi dan jalankan script:
+   ```bash
+   chmod +x install_raspi.sh
+   ./install_raspi.sh
+   ```
+4. Script akan meminta Anda untuk memasukkan `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, dan `GROQ_API_KEY`. Setelah selesai, bot Anda akan otomatis berjalan.
+
+---
+
+### Cara Manual
+
+Jika Anda lebih suka mengatur semuanya secara manual, ikuti langkah-langkah berikut:
+
 ### 1. Install OS
 Flash **Raspberry Pi OS (64-bit Lite)** ke MicroSD menggunakan [Raspberry Pi Imager](https://www.raspberrypi.com/software/). Aktifkan SSH saat flashing.
 
@@ -70,7 +91,7 @@ Flash **Raspberry Pi OS (64-bit Lite)** ke MicroSD menggunakan [Raspberry Pi Ima
 sudo apt update && sudo apt upgrade -y
 
 # Install Python, pip, dan Git
-sudo apt install -y python3 python3-pip python3-venv git
+sudo apt install -y python3 python3-pip python3-venv git curl
 
 # Install Docker (untuk PostgreSQL)
 curl -fsSL https://get.docker.com | sh
@@ -100,7 +121,7 @@ nano .env
 
 ### 5. Jalankan PostgreSQL
 ```bash
-docker compose up -d
+sudo docker compose up -d
 ```
 
 ### 6. Jalankan Bot sebagai Service (Auto-start)
