@@ -573,6 +573,10 @@ if __name__ == "__main__":
         )
         exit(1)
 
+    # Inisialisasi database (membuat tabel jika belum ada)
+    from backend.database.db import init_db
+    init_db()
+
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Command handlers

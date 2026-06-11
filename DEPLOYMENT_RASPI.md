@@ -66,7 +66,7 @@ Kami telah menyediakan script instalasi otomatis yang akan menjalankan semua lan
 1. Pastikan Anda sudah menginstall Raspberry Pi OS (langkah 1 di bawah).
 2. Salin folder proyek ke Raspberry Pi, atau clone repository:
    ```bash
-   git clone <URL_REPO_SFI> ~/sfi
+   git clone https://github.com/v0rein/smart-fridge-inventory ~/sfi
    cd ~/sfi
    ```
 3. Beri izin eksekusi dan jalankan script:
@@ -101,7 +101,7 @@ sudo usermod -aG docker $USER
 
 ### 3. Clone & Setup Project
 ```bash
-git clone <URL_REPO_SFI> ~/sfi
+git clone https://github.com/v0rein/smart-fridge-inventory ~/sfi
 cd ~/sfi
 
 # Buat virtual environment

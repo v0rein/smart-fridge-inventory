@@ -12,12 +12,13 @@ echo "================================================"
 # 1. Update system and install dependencies
 echo "[1/6] Updating system and installing dependencies..."
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3 python3-pip python3-venv git curl
+sudo apt install -y python3 python3-pip python3-venv git curl libpq-dev libpq5
 
 # Install Docker
 if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
-    curl -fsSL https://get.docker.com | sh
+    # Menggunakan repositori bawaan OS untuk menghindari error repositori "trixie" yang belum didukung Docker resmi
+    sudo apt install -y docker.io docker-compose-v2 || sudo apt install -y docker.io docker-compose
     sudo usermod -aG docker $USER
     echo "Docker installed. You may need to logout and login again for group changes to take effect."
 else
