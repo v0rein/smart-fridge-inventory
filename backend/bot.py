@@ -4,6 +4,7 @@ import logging
 import tempfile
 import datetime
 import cv2
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -24,15 +25,50 @@ from backend.database import crud
 from backend.database.models import CategoryEnum, ExpirySourceEnum, ActionEnum
 from backend.intelligence.ai_parser import parse_fridge_item_image
 
-def capture_webcam(output_path="/tmp/fridge_capture.jpg") -> bool:
-    """Capture an image from webcam (video0)."""
+# ========================================================
+# 📸 FUNGSI AMBIL FOTO WEBCAM (STANDBY MODE)
+# ========================================================
+global_camera = None
+
+def init_camera():
+    global global_camera
+    if global_camera is None:
+        logging.info("📸 Mengunci koneksi hardware Webcam (Standby Mode)...")
+        # -1 biasanya mendeteksi kamera USB utama di Linux
+        global_camera = cv2.VideoCapture(-1)
+        # Beri waktu awal agar sensor siap
+        import time
+        time.sleep(2)
+
+async def capture_webcam(output_path="/tmp/fridge_capture.jpg") -> bool:
+    """Capture an image from webcam using Standby Mode to prevent freezing."""
+    global global_camera
     try:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            logging.error("Webcam tidak dapat dibuka. Pastikan webcam terhubung.")
+        if global_camera is None or not global_camera.isOpened():
+            logging.error("Webcam tidak terhubung atau belum diinisialisasi.")
             return False
-        ret, frame = cap.read()
-        cap.release()
+            
+        # PENTING: Webcam UVC (seperti Logitech) mematikan auto-exposure jika frame tidak terus-menerus ditarik.
+        # Saat kita mau memotret, kita harus "membangunkan" sensornya dengan menarik banyak frame.
+        import numpy as np
+        
+        logging.info("Warming up camera sensor...")
+        
+        # Tarik 30 frame dengan cepat untuk memaksa sensor menyesuaikan cahaya (warm-up)
+        for _ in range(30):
+            global_camera.grab()  # grab() lebih cepat dari read() karena tidak me-decode gambar
+            await asyncio.sleep(0.05)
+            
+        ret, frame = global_camera.read()
+        
+        # Validasi: Jika gambar masih nyaris hitam pekat (belum fokus/terang), paksa tarik 20 frame lagi
+        if ret and np.mean(frame) < 10.0:
+            logging.info("Gambar masih terlalu gelap, melakukan ekstra warm-up...")
+            for _ in range(20):
+                global_camera.read()
+                await asyncio.sleep(0.1)
+            ret, frame = global_camera.read()
+            
         if ret:
             cv2.imwrite(output_path, frame)
             return True
@@ -138,7 +174,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await context.bot.send_message(chat_id=chat_id, text="Memotret dari webcam...")
     
     img_path = "/tmp/fridge_capture.jpg"
-    success = capture_webcam(img_path)
+    success = await capture_webcam(img_path)
     
     if not success:
         await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text="Gagal memotret dari webcam. Pastikan kamera terpasang di Raspberry Pi.")
@@ -167,7 +203,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def auto_scan_job(context: ContextTypes.DEFAULT_TYPE):
     """Job 5 menit - Memotret dan sync. Jika ada perubahan, kirim notif ke Admin (user pertama)."""
     img_path = "/tmp/fridge_auto_capture.jpg"
-    success = capture_webcam(img_path)
+    success = await capture_webcam(img_path)
     if not success:
         return
         
@@ -755,6 +791,9 @@ if __name__ == "__main__":
     # Inisialisasi database (membuat tabel jika belum ada)
     from backend.database.db import init_db
     init_db()
+    
+    # Inisialisasi kamera dalam Standby Mode
+    init_camera()
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 

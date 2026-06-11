@@ -12,7 +12,7 @@ echo "================================================"
 # 1. Update system and install dependencies
 echo "[1/6] Updating system and installing dependencies..."
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3 python3-pip python3-venv git curl libpq-dev libpq5
+sudo apt install -y python3 python3-pip python3-venv git curl libpq-dev libpq5 libopenblas-dev
 
 # Install Docker
 if ! command -v docker &> /dev/null; then
