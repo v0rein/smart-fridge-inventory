@@ -35,15 +35,17 @@
 
 | Komponen | Spesifikasi | Perkiraan Harga |
 |---|---|---|
-| Raspberry Pi 4B / 5 | RAM 4GB (minimal) | Rp 900.000 - 1.200.000 |
-| Power Supply | USB-C 5V 3A | Rp 100.000 |
+| Raspberry Pi 3 / 4B / 5 | RAM 1GB (Pi 3) atau 4GB (Pi 4B/5) | Rp 500.000 - 1.200.000 |
+| Power Supply | USB-C 5V 3A (Pi 4/5) atau Micro-USB 5V 2.5A (Pi 3) | Rp 100.000 |
 | MicroSD Card | 32GB Class 10 (minimal) | Rp 80.000 |
-| IP Camera (WiFi) | Resolusi 1080p, mendukung RTSP/MJPEG | Rp 200.000 - 500.000 |
+| USB Webcam | Resolusi 1080p (mis. Logitech) | Rp 200.000 - 500.000 |
 | Kabel Ethernet (opsional) | Cat5e | Rp 30.000 |
 
-**Total perkiraan: Rp 1.300.000 - 1.900.000**
+**Total perkiraan: Rp 900.000 - 1.900.000**
 
-> Catatan: Raspberry Pi tidak perlu kamera module (CSI). Kita menggunakan IP Camera terpisah yang terhubung via WiFi karena lebih fleksibel untuk penempatan.
+> **Catatan Raspberry Pi 3 (1GB RAM):** Jika menggunakan Pi 3, wajib menggunakan mode **SQLite** (tanpa Docker/PostgreSQL) agar RAM mencukupi. Script installer otomatis mendeteksi RAM dan merekomendasikan mode yang sesuai. Lihat bagian [Optimasi untuk Raspberry Pi 3](#optimasi-untuk-raspberry-pi-3) di bawah.
+
+> Catatan: Raspberry Pi tidak perlu kamera module (CSI). Kita menggunakan USB Webcam yang terhubung langsung via kabel USB.
 
 ## Wiring / Koneksi
 
@@ -193,6 +195,35 @@ cap.release()
 | Masalah | Solusi |
 |---|---|
 | Bot tidak jalan setelah reboot | Cek `sudo systemctl status sfi-bot` |
-| Tidak bisa connect ke PostgreSQL | Pastikan Docker berjalan: `docker ps` |
+| Tidak bisa connect ke PostgreSQL | Pastikan Docker berjalan: `docker ps` (hanya mode PostgreSQL) |
 | IP Camera tidak terdeteksi | Pastikan 1 jaringan WiFi, cek IP di router |
 | Groq API timeout | Pastikan koneksi internet Raspberry Pi stabil |
+| Out of Memory (OOM) di Pi 3 | Pastikan pakai mode SQLite, cek swap: `free -h` |
+
+## Optimasi untuk Raspberry Pi 3
+
+Raspberry Pi 3 memiliki RAM hanya 1GB, sehingga perlu beberapa penyesuaian agar SFI berjalan lancar:
+
+### 1. Gunakan SQLite (Bukan PostgreSQL)
+Jalankan `install_raspi.sh` dan pilih **Y** saat ditanya "Gunakan SQLite?". Ini menghilangkan kebutuhan Docker dan menghemat ~300MB RAM.
+
+### 2. Swap File
+Script installer otomatis mengatur swap ke 1024MB jika RAM < 2GB. Untuk mengecek:
+```bash
+free -h
+```
+
+### 3. Auto-Scan Webcam
+Auto-scan sudah dioptimasi menjadi setiap **30 menit** (bukan 5 menit) untuk mengurangi beban. Kamera juga menggunakan mode **Open-Close** (dibuka saat capture, lalu dilepas) agar tidak makan RAM saat idle.
+
+### 4. Gunakan OS 32-bit (Opsional)
+Raspberry Pi OS **32-bit Lite** menggunakan lebih sedikit RAM per proses dibanding 64-bit. Cocok untuk Pi 3 dengan 1GB RAM.
+
+### Estimasi Penggunaan RAM (Setelah Optimasi)
+| Komponen | RAM |
+|---|---|
+| OS (32-bit Lite) | ~100-130 MB |
+| Python Bot + SQLite | ~80-120 MB |
+| OpenCV (saat capture) | ~50-80 MB |
+| Groq SDK | ~30-40 MB |
+| **Total** | **~310-420 MB** ✅ |

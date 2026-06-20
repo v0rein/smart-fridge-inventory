@@ -26,56 +26,63 @@ from backend.database.models import CategoryEnum, ExpirySourceEnum, ActionEnum
 from backend.intelligence.ai_parser import parse_fridge_item_image
 
 # ========================================================
-# 📸 FUNGSI AMBIL FOTO WEBCAM (STANDBY MODE)
+# 📸 FUNGSI AMBIL FOTO WEBCAM (OPEN-CLOSE MODE)
+# Optimasi untuk Raspberry Pi 3 (1GB RAM):
+# Kamera dibuka hanya saat capture, lalu langsung dilepas
+# agar tidak menghabiskan RAM saat idle.
 # ========================================================
-global_camera = None
-
-def init_camera():
-    global global_camera
-    if global_camera is None:
-        logging.info("📸 Mengunci koneksi hardware Webcam (Standby Mode)...")
-        # -1 biasanya mendeteksi kamera USB utama di Linux
-        global_camera = cv2.VideoCapture(-1)
-        # Beri waktu awal agar sensor siap
-        import time
-        time.sleep(2)
 
 async def capture_webcam(output_path="/tmp/fridge_capture.jpg") -> bool:
-    """Capture an image from webcam using Standby Mode to prevent freezing."""
-    global global_camera
+    """Capture an image from webcam using Open-Close Mode.
+    Kamera dibuka saat dibutuhkan dan langsung dilepas setelah selesai
+    untuk menghemat RAM pada perangkat dengan memori terbatas.
+    """
+    cap = None
     try:
-        if global_camera is None or not global_camera.isOpened():
-            logging.error("Webcam tidak terhubung atau belum diinisialisasi.")
-            return False
-            
-        # PENTING: Webcam UVC (seperti Logitech) mematikan auto-exposure jika frame tidak terus-menerus ditarik.
-        # Saat kita mau memotret, kita harus "membangunkan" sensornya dengan menarik banyak frame.
         import numpy as np
-        
+
+        logging.info("📸 Membuka koneksi webcam...")
+        # -1 biasanya mendeteksi kamera USB utama di Linux
+        cap = cv2.VideoCapture(-1)
+
+        if not cap.isOpened():
+            logging.error("Webcam tidak terhubung atau tidak terdeteksi.")
+            return False
+
+        # Beri waktu awal agar sensor siap (warm-up)
+        await asyncio.sleep(2)
+
         logging.info("Warming up camera sensor...")
-        
-        # Tarik 30 frame dengan cepat untuk memaksa sensor menyesuaikan cahaya (warm-up)
-        for _ in range(30):
-            global_camera.grab()  # grab() lebih cepat dari read() karena tidak me-decode gambar
+
+        # Tarik 15 frame untuk memaksa sensor menyesuaikan cahaya
+        # (dikurangi dari 30 untuk menghemat waktu & resource di Pi 3)
+        for _ in range(15):
+            cap.grab()  # grab() lebih cepat dari read()
             await asyncio.sleep(0.05)
-            
-        ret, frame = global_camera.read()
-        
-        # Validasi: Jika gambar masih nyaris hitam pekat (belum fokus/terang), paksa tarik 20 frame lagi
+
+        ret, frame = cap.read()
+
+        # Validasi: Jika gambar masih nyaris hitam pekat, tarik frame tambahan
         if ret and np.mean(frame) < 10.0:
             logging.info("Gambar masih terlalu gelap, melakukan ekstra warm-up...")
-            for _ in range(20):
-                global_camera.read()
+            for _ in range(15):
+                cap.read()
                 await asyncio.sleep(0.1)
-            ret, frame = global_camera.read()
-            
+            ret, frame = cap.read()
+
         if ret:
             cv2.imwrite(output_path, frame)
+            logging.info("📸 Foto berhasil diambil.")
             return True
         return False
     except Exception as e:
         logging.error(f"Gagal mengambil foto dari webcam: {e}")
         return False
+    finally:
+        # Selalu lepas resource kamera setelah selesai
+        if cap is not None:
+            cap.release()
+            logging.info("📸 Koneksi webcam dilepas.")
 
 async def perform_absolute_sync(db, user, img_path) -> str:
     """Lakukan sinkronisasi absolut: AI mendeteksi X, maka db diset ke X. Item yang tak ada = 0."""
@@ -791,9 +798,9 @@ if __name__ == "__main__":
     # Inisialisasi database (membuat tabel jika belum ada)
     from backend.database.db import init_db
     init_db()
-    
-    # Inisialisasi kamera dalam Standby Mode
-    init_camera()
+
+    # Kamera diinisialisasi secara on-demand (Open-Close Mode)
+    # untuk menghemat RAM pada Raspberry Pi 3
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -824,14 +831,15 @@ if __name__ == "__main__":
         )
         print("Notifikasi harian terjadwal setiap jam 08:00 WIB.")
         
-        # Auto Scan setiap 5 menit via Webcam
+        # Auto Scan setiap 30 menit via Webcam
+        # (dioptimasi dari 5 menit untuk mengurangi beban RAM/CPU di Pi 3)
         job_queue.run_repeating(
             auto_scan_job,
-            interval=300, # 300 detik = 5 menit
-            first=10, # jalankan pertama kali 10 detik setelah start
+            interval=1800, # 1800 detik = 30 menit
+            first=30, # jalankan pertama kali 30 detik setelah start
             name="auto_webcam_scan"
         )
-        print("Auto-Scan Webcam terjadwal setiap 5 menit.")
+        print("Auto-Scan Webcam terjadwal setiap 30 menit.")
 
     print("Bot SFI sedang berjalan. Tekan Ctrl+C untuk berhenti.")
     application.run_polling()
