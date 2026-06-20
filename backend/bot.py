@@ -854,15 +854,14 @@ if __name__ == "__main__":
         )
         print("Notifikasi harian terjadwal setiap jam 08:00 WIB.")
         
-        # Auto Scan setiap 30 menit via Webcam
-        # (dioptimasi dari 5 menit untuk mengurangi beban RAM/CPU di Pi 3)
+        # Auto Scan setiap 2 menit via Webcam
         job_queue.run_repeating(
             auto_scan_job,
-            interval=1800, # 1800 detik = 30 menit
+            interval=120, # 120 detik = 2 menit
             first=30, # jalankan pertama kali 30 detik setelah start
             name="auto_webcam_scan"
         )
-        print("Auto-Scan Webcam terjadwal setiap 30 menit.")
+        print("Auto-Scan Webcam terjadwal setiap 2 menit.")
 
     print("Bot SFI sedang berjalan. Tekan Ctrl+C untuk berhenti.")
     application.run_polling()
