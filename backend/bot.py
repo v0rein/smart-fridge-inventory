@@ -140,13 +140,27 @@ async def perform_absolute_sync(db, user, img_path) -> str:
             except ValueError:
                 kategori = CategoryEnum.LAINNYA
                 
-            # Default expiry: +7 hari
-            expiry_date = datetime.date.today() + datetime.timedelta(days=7)
+            # Tentukan expiry date dari AI atau fallback berdasarkan kategori
+            expiry_date = None
+            expiry_source = ExpirySourceEnum.LLM_ESTIMATE
             if det["expiry_date_str"]:
                 try:
                     expiry_date = datetime.datetime.strptime(det["expiry_date_str"], "%Y-%m-%d").date()
+                    expiry_source = ExpirySourceEnum.OCR
                 except ValueError:
                     pass
+            
+            if not expiry_date:
+                # Fallback berdasarkan kategori (bukan selalu 7 hari)
+                fallback_days = {
+                    CategoryEnum.KEMASAN: 180,
+                    CategoryEnum.SAYUR: 5,
+                    CategoryEnum.BUAH: 7,
+                    CategoryEnum.DAGING: 3,
+                    CategoryEnum.LAINNYA: 14,
+                }
+                days = fallback_days.get(kategori, 14)
+                expiry_date = datetime.date.today() + datetime.timedelta(days=days)
             
             item_data = {
                 "user_id": int(str(user.user_id)),
@@ -155,7 +169,7 @@ async def perform_absolute_sync(db, user, img_path) -> str:
                 "unit": det["satuan"],
                 "quantity": det["jumlah"],
                 "expiry_date": expiry_date,
-                "expiry_source": ExpirySourceEnum.LLM_ESTIMATE,
+                "expiry_source": expiry_source,
             }
             new_item = crud.create_inventory_item(db, item_data)
             crud.create_scan_log(db, int(str(new_item.item_id)), ActionEnum.CHECKIN, det["jumlah"])
@@ -605,7 +619,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 pass
 
                     if not expiry_date:
-                        expiry_date = datetime.date.today() + datetime.timedelta(days=7)
+                        # Fallback berdasarkan kategori (bukan selalu 7 hari)
+                        fallback_days = {
+                            CategoryEnum.KEMASAN: 180,   # Produk kemasan awet berbulan-bulan
+                            CategoryEnum.SAYUR: 5,
+                            CategoryEnum.BUAH: 7,
+                            CategoryEnum.DAGING: 3,
+                            CategoryEnum.LAINNYA: 14,
+                        }
+                        days = fallback_days.get(kategori, 14)
+                        expiry_date = datetime.date.today() + datetime.timedelta(days=days)
                         expiry_source = ExpirySourceEnum.LLM_ESTIMATE
 
                     item_data = {
